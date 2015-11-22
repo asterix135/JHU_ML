@@ -1,0 +1,153 @@
+---
+title: "Machine Learning Project"
+author: "Christopher Graham"
+date: "November 18, 2015"
+output: html_document
+---
+
+# Summary
+
+We are attempting to build a predictor model, based on accelerometer data,
+telling us the method a subject used to perform barbell curls.  We will
+need to perform some preliminary data manipulation before building and comparing
+a few different models.
+
+# Preparation and cleaning
+
+First we load in the data sets and remove the first 7 columns as these
+are not relevant for classification (name of subject, time of experiment, etc)
+
+```{r prelim, message=FALSE, warning=FALSE}
+require(caret)
+require(randomForest)
+require(klaR) # For Naive Bayes
+
+train_set <- read.csv('pml-training.csv', stringsAsFactors = FALSE)
+test_set <- read.csv('pml-testing.csv', stringsAsFactors = FALSE)
+# get rid of useless columns for prediction
+train_set <- train_set[,-c(1:7)]
+test_set <- test_set[,-c(1:7)]
+# change all data but classe to numeric
+train_classe <- train_set$classe
+train_set <- as.data.frame(apply(train_set[,1:(ncol(train_set)-1)], 2, as.numeric))
+train_set <- cbind(train_set, classe=train_classe)
+#Last column is not numeric so we don't need the same workaround
+test_set <- as.data.frame(apply(test_set, 2, as.numeric))
+
+
+# How complete is the data?
+sum(complete.cases(train_set))
+# figure out how many NAs by column
+table(apply(train_set, 2, function(x) sum(is.na(x))))
+```
+
+Note that there are a lot of missing values in the data set.
+So, we keep the 53 complete variables eliminate those variables that are 
+almost all NA.
+
+```{r subset}
+del_cols1 <- apply(train_set, 2, function(x) sum(is.na(x)))
+del_cols2 <- names(del_cols1[del_cols1==0])
+train_set <- subset(train_set, select = del_cols2)
+del_cols2[length(del_cols2)] <- 'problem_id'
+test_set <- subset(test_set, select = del_cols2)
+```
+
+With this done, we will do the following:
+
+- split test set into a test set and validation set (80/20)
+- normalize variables (because I can't tell if the scales and measurements are on comparable scales)
+- Reduce variable complexity using PCA
+- build and compare a few different models
+
+```{r normalize etc}
+# Make classe a factor
+train_set$classe <- as.factor(train_set$classe)
+# split into train/validation sets
+set.seed(234579)
+train_idx <- createDataPartition(y=train_set$classe, p=0.8, list = FALSE)
+valid_set <- train_set[-train_idx,]
+train_set <- train_set[train_idx,]
+# create Pre-Processing object
+pre_obj <- preProcess(train_set[,-ncol(train_set)], 
+                      method=c('center','scale','pca'), pcaComp=20)
+# normalize training, validation & test sets
+train_norm <- predict(pre_obj, train_set)
+valid_norm <- predict(pre_obj, valid_set)
+test_norm <- predict(pre_obj, test_set)
+```
+
+# Model Building & Analysis
+
+We will build and compare the results for the following models:
+
+- Naive Bayes
+- Linear Discriminant Analysis
+- Random Forest
+
+
+```{r model building, message=FALSE}
+# Naive Bayes
+nb_model <- NaiveBayes(classe ~ ., data=train_norm)
+
+# LDA
+lda_model <- lda(classe ~ ., data=train_norm)
+```
+
+```{r rf model, message=FALSE}
+# Random Forest
+set.seed(1425234)
+rf_model <- randomForest(classe ~ ., data=train_norm)
+
+```
+
+```{r compare predictions, warning=FALSE, message=FALSE}
+mod_acc <- data.frame(model=NA, accuracy=NA)
+mod_acc[1,] <- c('Naive Bayes', 
+                 confusionMatrix(predict(nb_model, train_norm)$class,
+                                 train_norm$classe)$overall[1])
+
+mod_acc[2,] <- c('LDA',
+                 confusionMatrix(predict(lda_model, train_norm)$class,
+                                 train_norm$classe)$overall[1])
+
+mod_acc[3,] <- c('Random Forest',
+                 confusionMatrix(predict(rf_model, train_norm),
+                                 train_norm$classe)$overall[1])
+
+mod_acc
+
+```
+
+We see that the Random Forest model has very strong accuracy.  We check
+against the validation set to ensure that this is not due to overfitting.
+
+```{r validate}
+rf_confuse <- confusionMatrix(predict(rf_model, valid_norm), 
+                              valid_norm$classe)
+rf_confuse$overall[1]
+rf_confuse$table
+```
+
+We see a drop of 2% accuracy when applied to the validation set.  The change 
+from 100% to 98% accuracy is likely due to some overfitting of the model, seeing
+as it included a large number of variables, and could likely be improved upon
+with more work.  But since this report has to be posted in a couple of hours,
+I'm going to take 2% error as acceptable.  Plus, the model gets all the test
+set answers correct :)
+
+The biggest source of error seems to be classifying D classe exercises as C.
+
+```{r coursera submit}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+test_preds <- predict(rf_model, test_norm)
+
+pml_write_files(test_preds)
+```
