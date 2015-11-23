@@ -25,3 +25,4 @@ rsconnect/
 .DS_Store
 pml-testing.csv
 pml-training.csv
+gaData.csv
